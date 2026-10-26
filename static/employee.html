@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Knowledge Assistant</title><link rel="stylesheet" href="/static/app.css"></head>
+<body>
+<div id="login" class="login hidden">
+  <form class="card" id="loginForm">
+    <h1>Knowledge Assistant</h1><p class="muted" style="margin:0">Employee sign in</p>
+    <input id="u" placeholder="Username" autocomplete="username" required>
+    <input id="p" type="password" placeholder="Password" autocomplete="current-password" required>
+    <button>Sign in</button><p class="err" id="loginErr"></p>
+    <p class="muted small" style="margin:0">Reviewer? <a href="/reviewer">Reviewer portal</a></p>
+  </form>
+</div>
+<div id="app" class="hidden">
+  <header><strong>Knowledge Assistant</strong><div><span id="who" class="muted"></span><button class="ghost" id="logout">Log out</button></div></header>
+  <nav class="tabs"><button data-tab="ask" class="on">Ask</button><button data-tab="mine">My questions</button></nav>
+  <main>
+    <section id="ask">
+      <div id="chat" class="chat"><div class="msg bot">Hi! Ask me about company policies, IT, pricing and more. I only answer from company documents you have access to, and I'll pass anything I can't answer to a person.</div></div>
+      <form id="askForm" class="askbar"><input id="q" maxlength="1000" placeholder="Type your question…" autocomplete="off"><button id="send">Ask</button></form>
+    </section>
+    <section id="mine" class="hidden"><div id="history"></div></section>
+  </main>
+</div>
+<script src="/static/common.js"></script>
+<script>
+let timer = null;
+const addMsg = (html, cls) => { const d = document.createElement("div"); d.className = "msg " + cls; d.innerHTML = html; $("#chat").appendChild(d); d.scrollIntoView({block: "end"}); return d; };
+const escBtn = id => `<div><button class="link" data-chat="${id}">Not right? Send to a person</button></div>`;
+
+function hookEscalate(msg) {
+  const b = msg.querySelector("button[data-chat]"); if (!b) return;
+  b.onclick = async () => {
+    b.disabled = true;
+    try { const r = await api("/api/escalate", {method: "POST", body: JSON.stringify({chat_id: +b.dataset.chat})});
+          b.outerHTML = `<span class="muted small">Sent to a person (ticket #${r.ticket_id}). Check "My questions" for the reply.</span>`; }
+    catch (e) { b.disabled = false; alert(e.message); }
+  };
+}
+
+function renderReply(r) {
+  if (r.status === "answered") {
+    const src = r.sources.map(s => `<span class="chip">[${s.n}] ${esc(s.title)}</span>`).join("");
+    hookEscalate(addMsg(`${fmt(r.answer)}<div class="src">${src}</div>${escBtn(r.chat_id)}`, "bot"));
+  } else if (r.status === "escalated") {
+    addMsg(`I couldn't find a reliable answer in the documents you have access to, so I've sent your question to a person (ticket #${r.ticket_id}). The reply will appear under <b>My questions</b>.`, "bot warn");
+  } else {
+    hookEscalate(addMsg(`${esc(r.message)}${escBtn(r.chat_id)}`, "bot bad"));
+  }
+}
+
+$("#askForm").onsubmit = async e => {
+  e.preventDefault();
+  const q = $("#q").value.trim(); if (!q) return;
+  $("#q").value = ""; $("#send").disabled = true;
+  addMsg(fmt(q), "me");
+  const wait = addMsg("Thinking…", "bot muted");
+  try { renderReply(await api("/api/ask", {method: "POST", body: JSON.stringify({question: q})})); }
+  catch (err) { addMsg(esc(err.message), "bot bad"); }
+  wait.remove(); $("#send").disabled = false; $("#q").focus();
+};
+
+async function loadHistory() {
+  const rows = await api("/api/history");
+  $("#history").innerHTML = rows.length ? rows.map(c => {
+    let st = c.status === "answered" ? badge("Answered by AI", "ok") : c.status === "error" ? badge("Error", "bad") : "";
+    let human = "";
+    if (c.ticket) {
+      if (c.ticket.status === "answered") { st += badge("Reply from " + c.ticket.answered_by, "ok"); human = `<div class="human"><b>${esc(c.ticket.answered_by)}:</b> ${fmt(c.ticket.human_answer)}</div>`; }
+      else st += badge("Waiting for a person", "warn");
+    }
+    return `<div class="card"><div class="row"><b>${esc(c.question)}</b><span>${st}</span></div><div class="muted small">${esc(c.created)}</div>${c.answer ? `<div class="ans">${fmt(c.answer)}</div>` : ""}${human}</div>`;
+  }).join("") : `<p class="muted">No questions yet.</p>`;
+}
+
+setupLogin("employee", () => boot("employee", start));
+setupTabs(tab => { clearInterval(timer); if (tab === "mine") { loadHistory(); timer = setInterval(loadHistory, 15000); } });
+function start(me) { $("#who").textContent = `${me.username} · ${me.role}`; }
+boot("employee", start);
+</script>
+</body></html>

@@ -1,0 +1,21 @@
+# secrets - never commit these
+.env
+*.pem
+
+# local data created when the app runs
+app.db
+tickets.db
+*.db
+chroma_db/
+audit.jsonl
+data/docs/human_answer_*.md
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# editor / OS
+.vscode/
+.DS_Store

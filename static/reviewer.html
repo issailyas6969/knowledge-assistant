@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reviewer Portal</title><link rel="stylesheet" href="/static/app.css"></head>
+<body>
+<div id="login" class="login hidden">
+  <form class="card" id="loginForm">
+    <h1>Reviewer Portal</h1><p class="muted" style="margin:0">Sign in to answer questions and manage documents</p>
+    <input id="u" placeholder="Username" autocomplete="username" required>
+    <input id="p" type="password" placeholder="Password" autocomplete="current-password" required>
+    <button>Sign in</button><p class="err" id="loginErr"></p>
+    <p class="muted small" style="margin:0">Employee? <a href="/">Employee portal</a></p>
+  </form>
+</div>
+<div id="app" class="hidden">
+  <header><strong>Reviewer Portal</strong><div><span id="who" class="muted"></span><button class="ghost" id="logout">Log out</button></div></header>
+  <nav class="tabs"><button data-tab="dash" class="on">Dashboard</button><button data-tab="tickets">Tickets</button><button data-tab="docs">Documents</button></nav>
+  <main>
+    <section id="dash">
+      <div class="stats" id="cards"></div>
+      <h3>Questions the bot couldn't answer (documentation gaps)</h3>
+      <div class="card"><ul id="gaps" style="margin:0;padding-left:18px"></ul></div>
+    </section>
+    <section id="tickets" class="hidden">
+      <div class="filters"><button data-f="pending" class="on">Open</button><button data-f="answered" class="ghost">Answered</button></div>
+      <div id="tlist"></div>
+    </section>
+    <section id="docs" class="hidden">
+      <form id="upForm" class="card form">
+        <strong>Add a document</strong>
+        <input type="file" id="file" accept=".md,.txt,.pdf" required>
+        <input id="dtitle" placeholder="Title (optional)">
+        <div><span class="muted small">Who may see this document? (pick at least one)</span><div class="roles" id="upRoles"></div></div>
+        <div><button>Upload and index</button> <span id="upMsg" class="muted small"></span></div>
+      </form>
+      <div class="card"><table><thead><tr><th>Title</th><th>Visible to</th><th>Updated</th><th></th></tr></thead><tbody id="dbody"></tbody></table></div>
+    </section>
+  </main>
+</div>
+<script src="/static/common.js"></script>
+<script>
+let ROLES = [], filter = "pending";
+const roleBoxes = (checked = []) => ROLES.map(r => `<label><input type="checkbox" value="${esc(r)}" ${checked.includes(r) ? "checked" : ""}>${esc(r)}</label>`).join("");
+
+async function loadDash() {
+  const s = await api("/api/reviewer/stats");
+  $("#cards").innerHTML = [["Questions asked", s.total], ["Answered by AI", s.answered], ["Sent to people", s.escalated], ["Open tickets", s.tickets.pending], ["Documents", s.docs]]
+    .map(([l, v]) => `<div class="card stat"><div class="num">${v}</div><div class="muted">${l}</div></div>`).join("");
+  $("#gaps").innerHTML = s.gaps.length ? s.gaps.map(g => `<li>${esc(g.question)} ${badge(g.n + "×", "warn")}</li>`).join("") : `<li class="muted">None yet.</li>`;
+}
+
+async function loadTickets() {
+  const rows = await api("/api/reviewer/tickets?status=" + filter);
+  $("#tlist").innerHTML = rows.length ? rows.map(t => `
+    <div class="card" data-id="${t.id}">
+      <div class="row"><b>${esc(t.question)}</b><span class="muted small">#${t.id}</span></div>
+      <div class="muted small">${esc(t.user)} · ${esc(t.role)} · ${esc(t.created)}</div>
+      ${t.status === "pending" ? `
+        <textarea placeholder="Write your answer…" style="margin-top:8px"></textarea>
+        <label style="display:flex;gap:6px;align-items:center;margin-top:8px"><input type="checkbox" class="addkb" style="width:auto"> Add to knowledge base so the bot can answer this next time</label>
+        <div class="roles kbroles">${roleBoxes([t.role])}</div>
+        <button data-answer>Send answer</button>`
+      : `<div class="human"><b>${esc(t.answered_by)}:</b> ${fmt(t.human_answer)}</div>`}
+    </div>`).join("") : `<p class="muted">Nothing here.</p>`;
+}
+
+$("#tlist").onclick = async e => {
+  const b = e.target.closest("button[data-answer]"); if (!b) return;
+  const card = b.closest(".card"), text = card.querySelector("textarea").value.trim();
+  if (!text) return alert("Write an answer first.");
+  const roles = [...card.querySelectorAll(".kbroles input:checked")].map(i => i.value);
+  b.disabled = true;
+  try { await api(`/api/reviewer/tickets/${card.dataset.id}/answer`, {method: "POST", body: JSON.stringify({answer: text, add_to_kb: card.querySelector(".addkb").checked, roles})}); loadTickets(); }
+  catch (err) { alert(err.message); b.disabled = false; }
+};
+
+document.querySelectorAll(".filters button").forEach(b => b.onclick = () => {
+  filter = b.dataset.f;
+  document.querySelectorAll(".filters button").forEach(x => { x.classList.toggle("on", x === b); x.classList.toggle("ghost", x !== b); });
+  loadTickets();
+});
+
+async function loadDocs() {
+  const rows = await api("/api/reviewer/docs");
+  $("#dbody").innerHTML = rows.map(d => `<tr><td>${esc(d.title)} ${d.human ? badge("human-verified", "ok") : ""}<div class="muted small">${esc(d.filename)}</div></td>
+    <td>${esc(Array.isArray(d.roles) ? d.roles.join(", ") : d.roles)}</td><td>${esc(d.updated)}</td>
+    <td><button class="danger" data-del="${esc(d.filename)}">Delete</button></td></tr>`).join("") || `<tr><td colspan="4" class="muted">No documents yet.</td></tr>`;
+}
+
+$("#dbody").onclick = async e => {
+  const b = e.target.closest("[data-del]"); if (!b || !confirm("Delete " + b.dataset.del + "? The bot will stop using it.")) return;
+  try { await api("/api/reviewer/docs/" + encodeURIComponent(b.dataset.del), {method: "DELETE"}); loadDocs(); } catch (err) { alert(err.message); }
+};
+
+$("#upForm").onsubmit = async e => {
+  e.preventDefault();
+  const roles = [...document.querySelectorAll("#upRoles input:checked")].map(i => i.value);
+  if (!roles.length) return alert("Pick at least one role that may see this document.");
+  const fd = new FormData();
+  fd.append("file", $("#file").files[0]); fd.append("title", $("#dtitle").value); fd.append("roles", roles.join(","));
+  $("#upMsg").textContent = "Uploading and indexing…";
+  try { const d = await api("/api/reviewer/docs", {method: "POST", body: fd}); $("#upMsg").textContent = `Done: ${d.chunks} chunks indexed.`; $("#upForm").reset(); loadDocs(); }
+  catch (err) { $("#upMsg").textContent = err.message; }
+};
+
+setupLogin("reviewer", () => boot("reviewer", start));
+setupTabs(tab => { ({dash: loadDash, tickets: loadTickets, docs: loadDocs})[tab](); });
+function start(me) { ROLES = me.roles; $("#who").textContent = me.username; $("#upRoles").innerHTML = roleBoxes(); loadDash(); }
+boot("reviewer", start);
+</script>
+</body></html>

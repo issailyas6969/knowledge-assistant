@@ -1,0 +1,5 @@
+# SITE_ADDRESS=:80            -> plain HTTP on the server's IP
+# SITE_ADDRESS=demo.mysite.com -> Caddy gets a free HTTPS certificate automatically
+{$SITE_ADDRESS} {
+	reverse_proxy app:8000
+}
